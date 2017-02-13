@@ -386,7 +386,7 @@ class ElastAlerter():
         base_query = self.get_query(rule_filter, starttime, endtime, timestamp_field=rule['timestamp_field'], sort=False, to_ts_func=rule['dt_to_ts'], five=self.is_five())
         if term_size is None:
             term_size = rule.get('terms_size', 50)
-        query = self.get_aggregation_query(base_query, rule, query_key, term_size)
+        query = self.get_aggregation_query(base_query, rule, query_key, term_size, timestamp_field=rule['timestamp_field'])
         try:
             res = self.current_es.search(index=index, doc_type=rule['doc_type'], body=query, size=0, ignore_unavailable=True)
         except ElasticsearchException as e:
