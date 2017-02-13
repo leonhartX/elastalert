@@ -489,20 +489,18 @@ class ElastAlerter():
         query.update(sort)
 
         try:
-            if self.writeback_es:
-                res = self.writeback_es.search(index=self.writeback_index, doc_type='elastalert_status',
-                                               size=1, body=query, _source_include=['endtime', 'rule_name'])
-                if res['hits']['hits']:
-                    endtime = ts_to_dt(res['hits']['hits'][0]['_source']['endtime'])
+            res = self.writeback_es.search(index=self.writeback_index, doc_type='elastalert_status',
+                                           size=1, body=query, _source_include=['endtime', 'rule_name'])
+            if res['hits']['hits']:
+                endtime = ts_to_dt(res['hits']['hits'][0]['_source']['endtime'])
 
-                    if ts_now() - endtime < self.old_query_limit:
-                        return endtime
-                    else:
-                        elastalert_logger.info("Found expired previous run for %s at %s" % (rule['name'], endtime))
-                        return None
+                if ts_now() - endtime < self.old_query_limit:
+                    return endtime
+                else:
+                    elastalert_logger.info("Found expired previous run for %s at %s" % (rule['name'], endtime))
+                    return None
         except (ElasticsearchException, KeyError) as e:
             self.handle_error('Error querying for last run: %s' % (e), {'rule': rule['name']})
-            self.writeback_es = None
 
     def set_starttime(self, rule, endtime):
         """ Given a rule and an endtime, sets the appropriate starttime for it. """
@@ -719,7 +717,7 @@ class ElastAlerter():
 
         # In ES5, filters starting with 'query' should have the top wrapper removed
         if self.is_five():
-            for es_filter in new_rule.get('filter', []):
+            for es_filter in copy.copy(new_rule.get('filter', [])):
                 if es_filter.get('query'):
                     new_filter = es_filter['query']
                     new_rule['filter'].append(new_filter)
@@ -822,10 +820,6 @@ class ElastAlerter():
 
     def run_all_rules(self):
         """ Run each rule one time """
-        # If writeback_es errored, it's disabled until the next query cycle
-        if not self.writeback_es:
-            self.writeback_es = elasticsearch_client(self.conf)
-
         self.send_pending_alerts()
 
         next_run = datetime.datetime.utcnow() + self.run_every
@@ -1125,14 +1119,12 @@ class ElastAlerter():
         if '@timestamp' not in writeback_body:
             writeback_body['@timestamp'] = dt_to_ts(ts_now())
 
-        if self.writeback_es:
-            try:
-                res = self.writeback_es.index(index=self.writeback_index,
-                                              doc_type=doc_type, body=body)
-                return res
-            except ElasticsearchException as e:
-                logging.exception("Error writing alert info to Elasticsearch: %s" % (e))
-                self.writeback_es = None
+        try:
+            res = self.writeback_es.index(index=self.writeback_index,
+                                          doc_type=doc_type, body=body)
+            return res
+        except ElasticsearchException as e:
+            logging.exception("Error writing alert info to Elasticsearch: %s" % (e))
 
     def find_recent_pending_alerts(self, time_limit):
         """ Queries writeback_es to find alerts that did not send
@@ -1151,17 +1143,15 @@ class ElastAlerter():
         else:
             query = {'query': inner_query, 'filter': time_filter}
         query.update(sort)
-        if self.writeback_es:
-            try:
-                res = self.writeback_es.search(index=self.writeback_index,
-                                               doc_type='elastalert',
-                                               body=query,
-                                               size=1000)
-                if res['hits']['hits']:
-                    return res['hits']['hits']
-            except ElasticsearchException as e:
-                logging.exception("Error finding recent pending alerts: %s %s" % (e, query))
-                pass
+        try:
+            res = self.writeback_es.search(index=self.writeback_index,
+                                           doc_type='elastalert',
+                                           body=query,
+                                           size=1000)
+            if res['hits']['hits']:
+                return res['hits']['hits']
+        except ElasticsearchException as e:
+            logging.exception("Error finding recent pending alerts: %s %s" % (e, query))
         return []
 
     def send_pending_alerts(self):
@@ -1195,13 +1185,14 @@ class ElastAlerter():
                 if aggregated_matches:
                     matches = [match_body] + [agg_match['match_body'] for agg_match in aggregated_matches]
                     self.alert(matches, rule, alert_time=alert_time)
-                    if rule['current_aggregate_id']:
-                        for qk, id in rule['current_aggregate_id'].iteritems():
-                            if id == _id:
-                                rule['current_aggregate_id'].pop(qk)
-                                break
                 else:
                     self.alert([match_body], rule, alert_time=alert_time)
+
+                if rule['current_aggregate_id']:
+                    for qk, agg_id in rule['current_aggregate_id'].iteritems():
+                        if agg_id == _id:
+                            rule['current_aggregate_id'].pop(qk)
+                            break
 
                 # Delete it from the index
                 try:
@@ -1226,32 +1217,30 @@ class ElastAlerter():
         # XXX if there are more than self.max_aggregation matches, you have big alerts and we will leave entries in ES.
         query = {'query': {'query_string': {'query': 'aggregate_id:%s' % (_id)}}, 'sort': {'@timestamp': 'asc'}}
         matches = []
-        if self.writeback_es:
-            try:
-                res = self.writeback_es.search(index=self.writeback_index,
-                                               doc_type='elastalert',
-                                               body=query,
-                                               size=self.max_aggregation)
-                for match in res['hits']['hits']:
-                    matches.append(match['_source'])
-                    self.writeback_es.delete(index=self.writeback_index,
-                                             doc_type='elastalert',
-                                             id=match['_id'])
-            except (KeyError, ElasticsearchException) as e:
-                self.handle_error("Error fetching aggregated matches: %s" % (e), {'id': _id})
+        try:
+            res = self.writeback_es.search(index=self.writeback_index,
+                                           doc_type='elastalert',
+                                           body=query,
+                                           size=self.max_aggregation)
+            for match in res['hits']['hits']:
+                matches.append(match['_source'])
+                self.writeback_es.delete(index=self.writeback_index,
+                                         doc_type='elastalert',
+                                         id=match['_id'])
+        except (KeyError, ElasticsearchException) as e:
+            self.handle_error("Error fetching aggregated matches: %s" % (e), {'id': _id})
         return matches
 
     def find_pending_aggregate_alert(self, rule, aggregation_key_value=None):
         query = {'filter': {'bool': {'must': [{'term': {'rule_name': rule['name']}},
                                               {'range': {'alert_time': {'gt': ts_now()}}},
-                                              {'not': {'exists': {'field': 'aggregate_id'}}},
-                                              {'term': {'alert_sent': 'false'}}]}},
-                 'sort': {'alert_time': {'order': 'desc'}}}
+                                              {'term': {'alert_sent': 'false'}}],
+                                     'must_not': [{'exists': {'field': 'aggregate_id'}}]}}}
         if aggregation_key_value:
             query['filter']['bool']['must'].append({'term': {'aggregate_key': aggregation_key_value}})
-
-        if not self.writeback_es:
-            self.writeback_es = elasticsearch_client(self.conf)
+        if self.is_five():
+            query = {'query': {'bool': query}}
+        query['sort'] = {'alert_time': {'order': 'desc'}}
         try:
             res = self.writeback_es.search(index=self.writeback_index,
                                            doc_type='elastalert',
@@ -1284,7 +1273,6 @@ class ElastAlerter():
                 elastalert_logger.info('Adding alert for %s to aggregation(id: %s, aggregation_key: %s), next alert at %s' % (rule['name'], agg_id, aggregation_key_value, alert_time))
             else:
                 # First match, set alert_time
-                match_time = ts_to_dt(lookup_es_key(match, rule['timestamp_field']))
                 alert_time = ''
                 if isinstance(rule['aggregation'], dict) and rule['aggregation'].get('schedule'):
                     croniter._datetime_to_timestamp = cronite_datetime_to_timestamp  # For Python 2.6 compatibility
@@ -1294,7 +1282,11 @@ class ElastAlerter():
                     except Exception as e:
                         self.handle_error("Error parsing aggregate send time Cron format %s" % (e), rule['aggregation']['schedule'])
                 else:
-                    alert_time = match_time + rule['aggregation']
+                    if rule.get('aggregate_by_match_time', False):
+                        match_time = ts_to_dt(lookup_es_key(match, rule['timestamp_field']))
+                        alert_time = match_time + rule['aggregation']
+                    else:
+                        alert_time = ts_now() + rule['aggregation']
 
                 rule['aggregate_alert_time'][aggregation_key_value] = alert_time
                 agg_id = None
@@ -1380,29 +1372,25 @@ class ElastAlerter():
             query = {'filter': query}
         query.update(sort)
 
-        if self.writeback_es:
-            try:
-                res = self.writeback_es.search(index=self.writeback_index, doc_type='silence',
-                                               size=1, body=query, _source_include=['until', 'exponent'])
-            except ElasticsearchException as e:
-                self.handle_error("Error while querying for alert silence status: %s" % (e), {'rule': rule_name})
+        try:
+            res = self.writeback_es.search(index=self.writeback_index, doc_type='silence',
+                                           size=1, body=query, _source_include=['until', 'exponent'])
+        except ElasticsearchException as e:
+            self.handle_error("Error while querying for alert silence status: %s" % (e), {'rule': rule_name})
 
-                return False
+            return False
 
-            if res['hits']['hits']:
-                until_ts = res['hits']['hits'][0]['_source']['until']
-                exponent = res['hits']['hits'][0]['_source'].get('exponent', 0)
+        if res['hits']['hits']:
+            until_ts = res['hits']['hits'][0]['_source']['until']
+            exponent = res['hits']['hits'][0]['_source'].get('exponent', 0)
 
-                self.silence_cache[rule_name] = (ts_to_dt(until_ts), exponent)
-                if ts_now() < ts_to_dt(until_ts):
-                    return True
+            self.silence_cache[rule_name] = (ts_to_dt(until_ts), exponent)
+            if ts_now() < ts_to_dt(until_ts):
+                return True
         return False
 
     def handle_error(self, message, data=None):
         ''' Logs message at error level and writes message, data and traceback to Elasticsearch. '''
-        if not self.writeback_es:
-            self.writeback_es = elasticsearch_client(self.conf)
-
         logging.error(message)
         body = {'message': message}
         tb = traceback.format_exc()
