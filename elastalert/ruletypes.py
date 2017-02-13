@@ -869,7 +869,7 @@ class MetricAggregationRule(BaseAggregationRule):
         self.ts_field = self.rules.get('timestamp_field', '@timestamp')
         if 'max_threshold' not in self.rules and 'min_threshold' not in self.rules:
             raise EAException("MetricAggregationRule must have at least one of either max_threshold or min_threshold")
-        self.metric_app_type = self.rules['metric_agg_type']
+        self.metric_agg_type = self.rules['metric_agg_type']
         self.metric_key = self.rules['metric_agg_key'] +'_'+ self.metric_agg_type
         bucket_interval = self.rules.get('bucket_interval')
         if bucket_interval:
