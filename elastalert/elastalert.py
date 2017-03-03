@@ -166,8 +166,8 @@ class ElastAlerter():
         filters = copy.copy(filters)
         es_filters = {'filter': {'bool': {'must': filters}}}
         if starttime and endtime:
-            es_filters['filter']['bool']['must'].insert(0, {'range': {timestamp_field: {'gt': starttime,
-                                                                                        'lte': endtime}}})
+            es_filters['filter']['bool']['must'].insert(0, {'range': {timestamp_field: {'gte': starttime,
+                                                                                        'lt': endtime}}})
         if five:
             query = {'query': {'bool': es_filters}}
         else:
@@ -207,12 +207,8 @@ class ElastAlerter():
         if query_key is not None:
             aggs_element = {'bucket_aggs': {'terms': {'field': query_key, 'size': terms_size}, 'aggs': aggs_element}}
 
-        if not self.is_five():
-            query_element['filtered'].update({'aggs': aggs_element})
-            aggs_query = {'aggs': query_element}
-        else:
-            aggs_query = query
-            aggs_query['aggs'] = aggs_element
+        aggs_query = query
+        aggs_query['aggs'] = aggs_element
         return aggs_query
 
     def get_index_start(self, index, timestamp_field='@timestamp'):
@@ -394,12 +390,9 @@ class ElastAlerter():
         base_query = self.get_query(rule_filter, starttime, endtime, timestamp_field=rule['timestamp_field'], sort=False, to_ts_func=rule['dt_to_ts'], five=self.is_five())
         if term_size is None:
             term_size = rule.get('terms_size', 50)
-        query = self.get_aggregation_query(base_query, rule, query_key, term_size)
+        query = self.get_aggregation_query(base_query, rule, query_key, term_size, timestamp_field=rule['timestamp_field'])
         try:
-            if not self.is_five():
-                res = self.current_es.search(index=index, doc_type=rule.get('doc_type'), body=query, search_type='count', ignore_unavailable=True)
-            else:
-                res = self.current_es.search(index=index, doc_type=rule.get('doc_type'), body=query, size=0, ignore_unavailable=True)
+            res = self.current_es.search(index=index, doc_type=rule.get('doc_type'), body=query, size=0, ignore_unavailable=True)
         except ElasticsearchException as e:
             if len(str(e)) > 1024:
                 e = str(e)[:1024] + '... (%d characters removed)' % (len(str(e)) - 1024)
@@ -407,10 +400,7 @@ class ElastAlerter():
             return None
         if 'aggregations' not in res:
             return {}
-        if not self.is_five():
-            payload = res['aggregations']['filtered']
-        else:
-            payload = res['aggregations']
+        payload = res['aggregations']
         self.num_hits += res['hits']['total']
         return {endtime: payload}
 
@@ -676,6 +666,8 @@ class ElastAlerter():
             match = rule['type'].matches.pop(0)
             match['num_hits'] = self.num_hits
             match['num_matches'] = num_matches
+            if num_matches < rule['match_threshold']
+                continue
 
             # If realert is set, silence the rule for that duration
             # Silence is cached by query_key, if it exists
