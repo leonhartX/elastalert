@@ -666,7 +666,7 @@ class ElastAlerter():
             match = rule['type'].matches.pop(0)
             match['num_hits'] = self.num_hits
             match['num_matches'] = num_matches
-            if num_matches < rule['match_threshold']
+            if num_matches < rule['match_threshold']:
                 continue
 
             # If realert is set, silence the rule for that duration

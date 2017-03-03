@@ -894,6 +894,7 @@ class MetricAggregationRule(BaseAggregationRule):
     """ A rule that matches when there is a low number of events given a timeframe. """
     required_options = frozenset(['metric_agg_key', 'metric_agg_type', 'doc_type'])
     allowed_aggregations = frozenset(['min', 'max', 'avg', 'sum', 'cardinality', 'value_count', 'percentiles', 'percentile_ranks'])
+    percent_aggregations = frozenset(['percentiles', 'percentile_ranks'])
 
     def __init__(self, *args):
         super(MetricAggregationRule, self).__init__(*args)
@@ -901,6 +902,7 @@ class MetricAggregationRule(BaseAggregationRule):
         if 'max_threshold' not in self.rules and 'min_threshold' not in self.rules:
             raise EAException("MetricAggregationRule must have at least one of either max_threshold or min_threshold")
 
+        self.metric_agg_type = self.rules['metric_agg_type']
         self.metric_key = self.rules['metric_agg_key'] + '_' + self.rules['metric_agg_type']
 
         if not self.rules['metric_agg_type'] in self.allowed_aggregations:
@@ -913,10 +915,19 @@ class MetricAggregationRule(BaseAggregationRule):
         return message
 
     def generate_aggregation_query(self):
-        return {self.metric_key: {self.rules['metric_agg_type']: {'field': self.rules['metric_agg_key']}}}
+        query = {self.metric_key: {self.metric_agg_type: {'field': self.rules['metric_agg_key']}}}
+        if self.metric_agg_type == 'percentiles':
+            query[self.metric_key][self.metric_agg_type]['percents'] = [self.rules['value']]
+        elif self.metric_agg_type == 'percentile_ranks':
+            query[self.metric_key][self.metric_agg_type]['values'] = [self.rules['value']]
+        return query
 
     def check_matches(self, timestamp, query_key, aggregation_data):
-        metric_val = aggregation_data[self.metric_key]['value']
+        metric_val = 0
+        if self.metric_agg_type in self.percent_aggregations :
+            metric_val = aggregation_data[self.metric_key]['values'].values()[0]
+        else:
+            metric_val = aggregation_data[self.metric_key]['value']
         if self.check_thresholds(metric_val):
             match = {self.rules['timestamp_field']: timestamp,
                      self.metric_key: metric_val}
