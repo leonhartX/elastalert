@@ -116,7 +116,6 @@ class ElastAlerter():
         self.disabled_rules = []
         self.replace_dots_in_field_names = self.conf.get('replace_dots_in_field_names', False)
 
-        self.writeback_es = elasticsearch_client(self.conf)
         self.es_version = self.get_version()
 
         for rule in self.rules:
@@ -126,11 +125,14 @@ class ElastAlerter():
             self.silence()
 
     def get_version(self):
-        info = self.writeback_es.info()
+        info = self.writeback_es().info()
         return info['version']['number']
 
     def is_five(self):
         return self.es_version.startswith('5')
+
+    def writeback_es(self):
+        return elasticsearch_client(self.conf)
 
     @staticmethod
     def get_index(rule, starttime=None, endtime=None):
@@ -493,7 +495,7 @@ class ElastAlerter():
         query.update(sort)
 
         try:
-            res = self.writeback_es.search(index=self.writeback_index, doc_type='elastalert_status',
+            res = self.writeback_es().search(index=self.writeback_index, doc_type='elastalert_status',
                                            size=1, body=query, _source_include=['endtime', 'rule_name'])
             if res['hits']['hits']:
                 endtime = ts_to_dt(res['hits']['hits'][0]['_source']['endtime'])
@@ -1160,7 +1162,7 @@ class ElastAlerter():
             writeback_body['@timestamp'] = dt_to_ts(ts_now())
 
         try:
-            res = self.writeback_es.index(index=self.writeback_index,
+            res = self.writeback_es().index(index=self.writeback_index,
                                           doc_type=doc_type, body=body)
             return res
         except ElasticsearchException as e:
@@ -1184,7 +1186,7 @@ class ElastAlerter():
             query = {'query': inner_query, 'filter': time_filter}
         query.update(sort)
         try:
-            res = self.writeback_es.search(index=self.writeback_index,
+            res = self.writeback_es().search(index=self.writeback_index,
                                            doc_type='elastalert',
                                            body=query,
                                            size=1000)
@@ -1236,7 +1238,7 @@ class ElastAlerter():
 
                 # Delete it from the index
                 try:
-                    self.writeback_es.delete(index=self.writeback_index,
+                    self.writeback_es().delete(index=self.writeback_index,
                                              doc_type='elastalert',
                                              id=_id)
                 except:  # TODO: Give this a more relevant exception, try:except: is evil.
@@ -1258,13 +1260,13 @@ class ElastAlerter():
         query = {'query': {'query_string': {'query': 'aggregate_id:%s' % (_id)}}, 'sort': {'@timestamp': 'asc'}}
         matches = []
         try:
-            res = self.writeback_es.search(index=self.writeback_index,
+            res = self.writeback_es().search(index=self.writeback_index,
                                            doc_type='elastalert',
                                            body=query,
                                            size=self.max_aggregation)
             for match in res['hits']['hits']:
                 matches.append(match['_source'])
-                self.writeback_es.delete(index=self.writeback_index,
+                self.writeback_es().delete(index=self.writeback_index,
                                          doc_type='elastalert',
                                          id=match['_id'])
         except (KeyError, ElasticsearchException) as e:
@@ -1282,7 +1284,7 @@ class ElastAlerter():
             query = {'query': {'bool': query}}
         query['sort'] = {'alert_time': {'order': 'desc'}}
         try:
-            res = self.writeback_es.search(index=self.writeback_index,
+            res = self.writeback_es().search(index=self.writeback_index,
                                            doc_type='elastalert',
                                            body=query,
                                            size=1)
@@ -1413,7 +1415,7 @@ class ElastAlerter():
         query.update(sort)
 
         try:
-            res = self.writeback_es.search(index=self.writeback_index, doc_type='silence',
+            res = self.writeback_es().search(index=self.writeback_index, doc_type='silence',
                                            size=1, body=query, _source_include=['until', 'exponent'])
         except ElasticsearchException as e:
             self.handle_error("Error while querying for alert silence status: %s" % (e), {'rule': rule_name})
